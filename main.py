@@ -41,7 +41,7 @@ async def handle_text(message: Message):
         user_history = user_history[-10:]  # Обрезаем до 10 последних сообщений
 
     data = {
-        "model": "deepseek-ai/DeepSeek-R1",
+        "model": "mistralai/Mistral-Large-Instruct-2411",
         "messages": [
             {"role": "system", "content": "You are a senior AI software engineer and technical assistant. Write clean, professional code, explain clearly, and help with debugging and architecture."}
         ] + user_history,
