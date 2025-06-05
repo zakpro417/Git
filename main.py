@@ -23,7 +23,7 @@ dp = Dispatcher()
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message):
     user_sessions[message.from_user.id] = []
-    await message.answer("👋 Привіт! Я перший ші бот якій уміє пиздити цепком задвай питання", parse_mode='HTML')
+    await message.answer("👋 Алах акбар слава Україні! Я перший ші бот якій уміє пиздити цепком задвай питання", parse_mode='HTML')
 
 @dp.message(lambda message: message.text)
 async def handle_text(message: Message):
