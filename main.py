@@ -23,7 +23,7 @@ dp = Dispatcher()
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message):
     user_sessions[message.from_user.id] = []
-    await message.answer("👋 Привіт! Я бот з підтримкою ШІ. Став мені запитання!", parse_mode='HTML')
+    await message.answer("👋 Привіт! Я перший ші бот якій уміє пиздити цепком задвай питання", parse_mode='HTML')
 
 @dp.message(lambda message: message.text)
 async def handle_text(message: Message):
@@ -53,7 +53,7 @@ async def handle_text(message: Message):
             text = response_json['choices'][0]['message']['content']
             bot_text = text.split('</think>\n\n')[-1]
         except (KeyError, IndexError):
-            bot_text = "⚠️ Помилка: не вдалося прочитати відповідь."
+            bot_text = "⚠️ Помилка: аааа піздец баклажани рвут резину невдалося прочітати текст."
 
         user_history.append({"role": "assistant", "content": bot_text})
         user_sessions[user_id] = user_history
@@ -62,7 +62,7 @@ async def handle_text(message: Message):
 
     except requests.exceptions.RequestException as e:
         logging.error(f"API request failed: {e}")
-        await message.answer("⚠️ Помилка під час запиту до ШІ.", parse_mode="Markdown")
+        await message.answer("⚠️ Помилка у ші бачок потік невідповідає.", parse_mode="Markdown")
 
 @dp.message(lambda message: message.photo)
 async def handle_image(message: types.Message):
@@ -73,7 +73,7 @@ async def handle_image(message: types.Message):
         file_url = f"https://api.telegram.org/file/bot{TOKEN}/{file_path}"
 
         data = {
-            "model": "Qwen/Qwen2-VL-7B-Instruct",
+            "model": "meta-llama/Llama-3.2-90B-Vision-Instruct",
             "messages": [
                 {
                     "role": "system",
@@ -96,16 +96,16 @@ async def handle_image(message: types.Message):
         try:
             text = response_json['choices'][0]['message']['content']
         except (KeyError, IndexError):
-            text = "⚠️ Помилка: не вдалося отримати відповідь від ШІ."
+            text = "⚠️ Помилка: піздец блятскому хутору не отвічяє."
 
         await message.answer(text, parse_mode="Markdown")
 
     except requests.exceptions.RequestException as e:
         logging.error(f"API request failed: {e}")
-        await message.answer("⚠️ Помилка під час запиту зображення.", parse_mode="Markdown")
+        await message.answer("⚠️ Помилка шото із ізображеніем ебать.", parse_mode="Markdown")
     except Exception as e:
         logging.error(f"Unexpected error: {e}")
-        await message.answer("⚠️ Сталася непередбачена помилка.", parse_mode="Markdown")
+        await message.answer("⚠️ Сталася хуй пойми яка помилка.", parse_mode="Markdown")
 
 async def main():
     await bot(DeleteWebhook(drop_pending_updates=True))
