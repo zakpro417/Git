@@ -1,0 +1,50 @@
+name: build
+on:
+  push:
+    branches-ignore: [esp-build]
+permissions:
+  contents: write
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/cache@v4
+        with:
+          path: ~/.platformio
+          key: pio-${{ runner.os }}-${{ hashFiles('fw/platformio.ini') }}
+          restore-keys: pio-${{ runner.os }}-
+      - run: pip install platformio
+      - name: Build
+        id: build
+        working-directory: fw
+        run: |
+          set +e
+          pio run 2>&1 | tee ../build.log
+          echo "rc=${PIPESTATUS[0]}" >> "$GITHUB_OUTPUT"
+      - name: Collect
+        if: always()
+        run: |
+          mkdir -p out
+          cp build.log out/ || true
+          echo "${{ github.sha }}" > out/commit.txt
+          echo "${{ steps.build.outputs.rc }}" > out/rc.txt
+          D=$(ls -d fw/.pio/build/*/ 2>/dev/null | head -1)
+          if [ "${{ steps.build.outputs.rc }}" = "0" ] && [ -n "$D" ]; then
+            cp "$D"firmware.bin "$D"bootloader.bin "$D"partitions.bin out/ 2>/dev/null || true
+            B=$(find ~/.platformio/packages -name boot_app0.bin 2>/dev/null | head -1)
+            [ -n "$B" ] && cp "$B" out/ || true
+          fi
+      - name: Publish
+        if: always()
+        run: |
+          cd out
+          git init -q -b esp-build
+          git config user.name build
+          git config user.email build@example.com
+          git add -A
+          git commit -qm "build ${{ github.sha }}"
+          git push -qf "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" esp-build
