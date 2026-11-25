@@ -1,39 +1,62 @@
 #include <Arduino.h>
-#include <WiFi.h>
 #include <ArduinoJson.h>
 
-#define SERIAL_BAUD 115200
-
-char ssid[32];
-char password[32];
+#define LED_PIN 2
+bool power = true;
+int brightness = 128;
+String color = "#0000FF";
 
 void setup() {
-    Serial.begin(SERIAL_BAUD);
-    Serial.println("Введіть SSID:");
-    while (Serial.available() == 0) { }
-    Serial.readBytesUntil('\n', ssid, sizeof(ssid));
-
-    Serial.println("Введіть пароль:");
-    while (Serial.available() == 0) { }
-    Serial.readBytesUntil('\n', password, sizeof(password));
-
-    WiFi.begin(ssid, password);
-    while (WiFi.status() != WL_CONNECTED) {
-        delay(1000);
-        Serial.println("Підключення до Wi-Fi...");
-    }
-    Serial.println("Успішно підключено до Wi-Fi!");
+    Serial.begin(115200);
+    pinMode(LED_PIN, OUTPUT);
+    updateLED();
 }
 
 void loop() {
     if (Serial.available()) {
-        String command = Serial.readStringUntil('\n');
-        DynamicJsonDocument doc(256);
-        deserializeJson(doc, command);
-
-        if (doc["cmd"] == "describe") {
-            String response = "{\"type\":\"describe\",\"firmware\":\"LED Controller\",\"version\":\"1.0\",\"modules\":[{\"id\":\"led\",\"name\":\"LED Strip\",\"controls\":[{\"id\":\"power\",\"type\":\"switch\",\"label\":\"Power\",\"value\":true},{\"id\":\"brightness\",\"type\":\"slider\",\"label\":\"Brightness\",\"min\":0,\"max\":255,\"value\":128},{\"id\":\"color\",\"type\":\"color\",\"label\":\"Color\",\"value\":\"#0000FF\"},{\"id\":\"go\",\"type\":\"button\",\"label\":\"Run\"},{\"id\":\"temp\",\"type\":\"readout\",\"label\":\"Temperature\",\"value\":\"21.5 C\"}]}]}";
-            Serial.println(response);
-        }
+        String line = Serial.readStringUntil('\n');
+        handleCommand(line);
     }
+}
+
+void handleCommand(String cmd) {
+    DynamicJsonDocument doc(1024);
+    deserializeJson(doc, cmd);
+    const char* command = doc["cmd"];
+    
+    if (strcmp(command, "describe") == 0) {
+        describe();
+    } else if (strcmp(command, "set") == 0) {
+        const char* module = doc["module"];
+        const char* id = doc["id"];
+        if (strcmp(module, "led") == 0) {
+            if (strcmp(id, "power") == 0) {
+                power = doc["value"];
+                updateLED();
+            } else if (strcmp(id, "brightness") == 0) {
+                brightness = doc["value"];
+                updateLED();
+            } else if (strcmp(id, "color") == 0) {
+                color = doc["value"];
+                updateLED();
+            }
+        }
+    } else if (strcmp(command, "press") == 0) {
+        // Handle button press events here
+    }
+}
+
+void describe() {
+    String response = "{\"type\":\"describe\",\"firmware\":\"LED Controller\",\"version\":\"1.0\",\"modules\":[{\"id\":\"led\",\"name\":\"LED Strip\",\"controls\":[{\"id\":\"power\",\"type\":\"switch\",\"label\":\"Power\",\"value\":";
+    response += power ? "true" : "false";
+    response += "},{\"id\":\"brightness\",\"type\":\"slider\",\"label\":\"Brightness\",\"min\":0,\"max\":255,\"value\":";
+    response += brightness;
+    response += "},{\"id\":\"color\",\"type\":\"color\",\"label\":\"Color\",\"value\":\"";
+    response += color;
+    response += "\"},{\"id\":\"go\",\"type\":\"button\",\"label\":\"Run\"},{\"id\":\"temp\",\"type\":\"readout\",\"label\":\"Temperature\",\"value\":\"21.5 C\"}]}]}";
+    Serial.println(response);
+}
+
+void updateLED() {
+    // Implement LED control based on power, brightness, and color
 }
