@@ -57,6 +57,12 @@ void setRGB(int red, int green, int blue) {
     analogWrite(greenPin, green);
     analogWrite(bluePin, blue);
 
+    // Отладочные сообщения о состоянии пинов
+    Serial.print("Setting RGB to: ");
+    Serial.print("R: "); Serial.print(red);
+    Serial.print(" G: "); Serial.print(green);
+    Serial.print(" B: "); Serial.println(blue);
+
     // Отправляем обновленное состояние цвета
     String rgbResponse = "{\"type\":\"update\",\"module\":\"rgb\",\"id\":\"color\",\"value\":\"rgb(" + String(red) + ", " + String(green) + ", " + String(blue) + ")\"}";
     Serial.println(rgbResponse);
