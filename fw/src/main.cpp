@@ -2,6 +2,9 @@
 
 const int ledPin = 2; // Пин светодиода
 
+void handleCommand(const String& command);
+void describe();
+
 void setup() {
     Serial.begin(115200);
     pinMode(ledPin, OUTPUT);
@@ -19,7 +22,7 @@ void handleCommand(const String& command) {
     StaticJsonDocument<200> doc;
     deserializeJson(doc, command);
 
-    if (doc.containsKey("cmd")) {
+    if (doc["cmd"].is<String>()) {
         const char* cmd = doc["cmd"];
 
         if (strcmp(cmd, "describe") == 0) {
