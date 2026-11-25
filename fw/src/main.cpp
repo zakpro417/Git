@@ -1,10 +1,28 @@
 #include <Arduino.h>
+#include <WiFi.h>
 #include <ArduinoJson.h>
 
 #define SERIAL_BAUD 115200
 
+char ssid[32];
+char password[32];
+
 void setup() {
     Serial.begin(SERIAL_BAUD);
+    Serial.println("Введіть SSID:");
+    while (Serial.available() == 0) { }
+    Serial.readBytesUntil('\n', ssid, sizeof(ssid));
+
+    Serial.println("Введіть пароль:");
+    while (Serial.available() == 0) { }
+    Serial.readBytesUntil('\n', password, sizeof(password));
+
+    WiFi.begin(ssid, password);
+    while (WiFi.status() != WL_CONNECTED) {
+        delay(1000);
+        Serial.println("Підключення до Wi-Fi...");
+    }
+    Serial.println("Успішно підключено до Wi-Fi!");
 }
 
 void loop() {
