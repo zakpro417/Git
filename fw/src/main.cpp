@@ -1,16 +1,18 @@
 #include <ArduinoJson.h>
 
 const int ledPin = 2; // Пин светодиода
-float temperature = 20.0; // Начальная температура
+const int buttonPin = 0; // Пин кнопки на плате
+bool ledState = false; // Состояние LED
 
 void handleCommand(const String& command);
 void describe();
-void updateTemperature();
+void updateLEDState();
 
 void setup() {
     Serial.begin(115200);
     pinMode(ledPin, OUTPUT);
-    digitalWrite(ledPin, LOW);
+    pinMode(buttonPin, INPUT_PULLUP); // Используем подтяжку к VCC
+    updateLEDState(); // Установка начального состояния
 }
 
 void loop() {
@@ -19,9 +21,17 @@ void loop() {
         handleCommand(command);
     }
 
-    // Обновлять температуру каждые 5 секунд
-    updateTemperature();
-    delay(5000);
+    // Проверка состояния кнопки
+    if (digitalRead(buttonPin) == LOW) {
+        ledState = !ledState; // Переключаем состояние LED
+        updateLEDState();
+        delay(300); // Задержка для устранения дребезга
+    }
+
+    // Отправляем состояние LED каждую секунду
+    String response = "{\"type\":\"update\",\"module\":\"led\",\"id\":\"power\",\"value\":" + String(ledState ? "true" : "false") + "}";
+    Serial.println(response);
+    delay(1000);
 }
 
 void handleCommand(const String& command) {
@@ -37,25 +47,23 @@ void handleCommand(const String& command) {
             const char* id = doc["id"];
             bool value = doc["value"];
             if (strcmp(id, "power") == 0) {
-                digitalWrite(ledPin, value ? HIGH : LOW);
+                ledState = value; // Установите состояние LED по команде
+                updateLEDState();
             }
         } else if (strcmp(cmd, "press") == 0 && doc["module"] == "led") {
             const char* id = doc["id"];
             if (strcmp(id, "go") == 0) {
-                Serial.println("Button pressed!");
+                Serial.println("Button on the app pressed!");
             }
         }
     }
 }
 
-void updateTemperature() {
-    // Имитация изменения температуры
-    temperature += (random(-1, 2)); // Случайное изменение температуры
-    String response = "{\"type\":\"update\",\"module\":\"led\",\"id\":\"temp\",\"value\":\"" + String(temperature) + " C\"}";
-    Serial.println(response);
+void updateLEDState() {
+    digitalWrite(ledPin, ledState ? HIGH : LOW);
 }
 
 void describe() {
-    String response = "{\"type\":\"describe\",\"firmware\":\"LED Controller\",\"version\":\"1.0\",\"modules\":[{\"id\":\"led\",\"name\":\"LED Controller\",\"controls\":[{\"id\":\"power\",\"type\":\"switch\",\"label\":\"Power\",\"value\":false},{\"id\":\"go\",\"type\":\"button\",\"label\":\"Press Me\"},{\"id\":\"temp\",\"type\":\"readout\",\"label\":\"Temperature\",\"value\":\"" + String(temperature) + " C\"}]}]}";
+    String response = "{\"type\":\"describe\",\"firmware\":\"LED Controller\",\"version\":\"1.0\",\"modules\":[{\"id\":\"led\",\"name\":\"LED Controller\",\"controls\":[{\"id\":\"power\",\"type\":\"switch\",\"label\":\"Power\",\"value\":" + String(ledState ? "true" : "false") + "},{\"id\":\"go\",\"type\":\"button\",\"label\":\"Press Me\"}]}]}";
     Serial.println(response);
 }
