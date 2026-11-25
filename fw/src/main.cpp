@@ -16,6 +16,8 @@ void loop() {
         String command = Serial.readStringUntil('\n');
         handleCommand(command);
     }
+
+    // Предположим, здесь может быть код для обновления состояния, если требуется.
 }
 
 void handleCommand(const String& command) {
@@ -43,6 +45,6 @@ void handleCommand(const String& command) {
 }
 
 void describe() {
-    String response = "{\"type\":\"describe\",\"firmware\":\"LED Controller\",\"version\":\"1.0\",\"modules\":[{\"id\":\"led\",\"name\":\"LED Buttons\",\"controls\":[{\"id\":\"power\",\"type\":\"switch\",\"label\":\"Power\",\"value\":false},{\"id\":\"go\",\"type\":\"button\",\"label\":\"Press Me\"}]}]}";
+    String response = "{\"type\":\"describe\",\"firmware\":\"LED Controller\",\"version\":\"1.0\",\"modules\":[{\"id\":\"led\",\"name\":\"LED Controller\",\"controls\":[{\"id\":\"power\",\"type\":\"switch\",\"label\":\"Power\",\"value\":false},{\"id\":\"go\",\"type\":\"button\",\"label\":\"Press Me\"}]}]}";
     Serial.println(response);
 }
