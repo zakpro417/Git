@@ -58,5 +58,9 @@ void describe() {
 }
 
 void updateLED() {
-    // Implement LED control based on power, brightness, and color
+    if (power) {
+        Serial.println("LED is ON");
+    } else {
+        Serial.println("LED is OFF");
+    }
 }
