@@ -14,9 +14,14 @@ void setRGB(int red, int green, int blue);
 
 void setup() {
     Serial.begin(115200);
-    pinMode(redPin, OUTPUT);
-    pinMode(greenPin, OUTPUT);
-    pinMode(bluePin, OUTPUT);
+
+    // Настройка пинов для PWM
+    ledcSetup(0, 5000, 8);
+    ledcAttachPin(redPin, 0);
+    ledcSetup(1, 5000, 8);
+    ledcAttachPin(greenPin, 1);
+    ledcSetup(2, 5000, 8);
+    ledcAttachPin(bluePin, 2);
     
     setRGB(redValue, greenValue, blueValue); // Установим начальные значения
 }
@@ -53,15 +58,9 @@ void handleCommand(const String& command) {
 }
 
 void setRGB(int red, int green, int blue) {
-    analogWrite(redPin, red);
-    analogWrite(greenPin, green);
-    analogWrite(bluePin, blue);
-
-    // Отладочные сообщения о состоянии пинов
-    Serial.print("Setting RGB to: ");
-    Serial.print("R: "); Serial.print(red);
-    Serial.print(" G: "); Serial.print(green);
-    Serial.print(" B: "); Serial.println(blue);
+    ledcWrite(0, red);
+    ledcWrite(1, green);
+    ledcWrite(2, blue);
 
     // Отправляем обновленное состояние цвета
     String rgbResponse = "{\"type\":\"update\",\"module\":\"rgb\",\"id\":\"color\",\"value\":\"rgb(" + String(red) + ", " + String(green) + ", " + String(blue) + ")\"}";
