@@ -1,9 +1,11 @@
 #include <ArduinoJson.h>
 
 const int ledPin = 2; // Пин светодиода
+float temperature = 20.0; // Начальная температура
 
 void handleCommand(const String& command);
 void describe();
+void updateTemperature();
 
 void setup() {
     Serial.begin(115200);
@@ -17,7 +19,9 @@ void loop() {
         handleCommand(command);
     }
 
-    // Предположим, здесь может быть код для обновления состояния, если требуется.
+    // Обновлять температуру каждые 5 секунд
+    updateTemperature();
+    delay(5000);
 }
 
 void handleCommand(const String& command) {
@@ -44,7 +48,14 @@ void handleCommand(const String& command) {
     }
 }
 
+void updateTemperature() {
+    // Имитация изменения температуры
+    temperature += (random(-1, 2)); // Случайное изменение температуры
+    String response = "{\"type\":\"update\",\"module\":\"led\",\"id\":\"temp\",\"value\":\"" + String(temperature) + " C\"}";
+    Serial.println(response);
+}
+
 void describe() {
-    String response = "{\"type\":\"describe\",\"firmware\":\"LED Controller\",\"version\":\"1.0\",\"modules\":[{\"id\":\"led\",\"name\":\"LED Controller\",\"controls\":[{\"id\":\"power\",\"type\":\"switch\",\"label\":\"Power\",\"value\":false},{\"id\":\"go\",\"type\":\"button\",\"label\":\"Press Me\"}]}]}";
+    String response = "{\"type\":\"describe\",\"firmware\":\"LED Controller\",\"version\":\"1.0\",\"modules\":[{\"id\":\"led\",\"name\":\"LED Controller\",\"controls\":[{\"id\":\"power\",\"type\":\"switch\",\"label\":\"Power\",\"value\":false},{\"id\":\"go\",\"type\":\"button\",\"label\":\"Press Me\"},{\"id\":\"temp\",\"type\":\"readout\",\"label\":\"Temperature\",\"value\":\"" + String(temperature) + " C\"}]}]}";
     Serial.println(response);
 }
