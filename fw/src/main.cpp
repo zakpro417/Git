@@ -2,7 +2,7 @@
 #include <FastLED.h>
 #include <ArduinoJson.h>
 
-#define LED_PIN    48
+#define LED_PIN    46
 #define NUM_LEDS   1
 #define BRIGHTNESS 60
 
