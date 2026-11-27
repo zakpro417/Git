@@ -1,73 +1,117 @@
+#include <Arduino.h>
+#include <FastLED.h>
 #include <ArduinoJson.h>
 
-const int redPin = 2;   // Пин для красного цвета
-const int greenPin = 4; // Пин для зеленого цвета
-const int bluePin = 5;  // Пин для синего цвета
+#define LED_PIN    48
+#define NUM_LEDS   1
+#define BRIGHTNESS 60
 
-int redValue = 0;
-int greenValue = 0;
-int blueValue = 0;
+CRGB leds[NUM_LEDS];
 
-void handleCommand(const String& command);
-void describe();
-void setRGB(int red, int green, int blue);
+// Палитра: плавный перебор цветов
+const CRGBPalette16 palette = CRGBPalette16(
+  CRGB::Red, CRGB::OrangeRed, CRGB::Gold, CRGB::Yellow,
+  CRGB::Green, CRGB::Aquamarine, CRGB::Cyan, CRGB::Blue,
+  CRGB::Blue, CRGB::BlueViolet, CRGB::Magenta, CRGB::Pink,
+  CRGB::Red, CRGB::OrangeRed, CRGB::Gold, CRGB::Yellow);
+
+bool  gPower = true;
+float gPhase = 0.0;
+uint32_t gLast = 0;
+
+void sendDescribe() {
+  StaticJsonDocument<1024> doc;
+  doc["type"] = "describe";
+  doc["firmware"] = "RGB Blink ESP32-S3";
+  doc["version"] = "1.0";
+
+  JsonObject mod = doc.createNestedObject("modules");
+  mod.createNestedObject("id"); // placeholder removed below
+  doc["modules"].remove(0);
+
+  JsonObject m = doc["modules"].createNestedObject();
+  m["id"] = "rgb";
+  m["name"] = "RGB LED";
+
+  JsonArray c = m.createNestedArray("controls");
+  JsonObject o = c.createNestedObject();
+  o["id"] = "power"; o["type"] = "switch"; o["label"] = "Power"; o["value"] = true;
+
+  o = c.createNestedObject();
+  o["id"] = "speed"; o["type"] = "slider"; o["label"] = "Speed";
+  o["min"] = 1; o["max"] = 20; o["value"] = 6;
+
+  o = c.createNestedObject();
+  o["id"] = "bright"; o["type"] = "slider"; o["label"] = "Brightness";
+  o["min"] = 0; o["max"] = 255; o["value"] = BRIGHTNESS;
+
+  o = c.createNestedObject();
+  o["id"] = "color"; o["type"] = "color"; o["label"] = "Color"; o["value"] = "#FF0000";
+
+  String out;
+  serializeJson(doc, out);
+  Serial.println(out);
+}
+
+int gSpeed = 6;
+CRGB gFixed = CRGB::Red;
+bool gUseFixed = false;
+
+void applySet(JsonObject root) {
+  String id = root["id"] | "";
+  JsonVariant v = root["value"];
+  if (id == "power") gPower = v.as<bool>();
+  else if (id == "speed") gSpeed = v.as<int>();
+  else if (id == "bright") FastLED.setBrightness(v.as<int>());
+  else if (id == "color") {
+    String s = v.as<String>();
+    if (s.length() == 7 && s[0] == '#') {
+      gFixed = CRGB(strtol(s.substring(1,3).c_str(), nullptr, 16),
+                    strtol(s.substring(3,5).c_str(), nullptr, 16),
+                    strtol(s.substring(5,7).c_str(), nullptr, 16));
+      gUseFixed = true;
+    }
+  }
+}
 
 void setup() {
-    Serial.begin(115200);
-
-    // Настройка пинов для PWM
-    ledcSetup(0, 5000, 8);
-    ledcAttachPin(redPin, 0);
-    ledcSetup(1, 5000, 8);
-    ledcAttachPin(greenPin, 1);
-    ledcSetup(2, 5000, 8);
-    ledcAttachPin(bluePin, 2);
-    
-    setRGB(redValue, greenValue, blueValue); // Установим начальные значения
+  Serial.begin(115200);
+  delay(300);
+  FastLED.addLeds<WS2812, LED_PIN, GRB>(leds, NUM_LEDS);
+  FastLED.setBrightness(BRIGHTNESS);
+  gLast = millis();
+  sendDescribe();
+  Serial.println("RGB blink ready");
 }
 
 void loop() {
-    if (Serial.available() > 0) {
-        String command = Serial.readStringUntil('\n');
-        handleCommand(command);
+  // приём команд
+  while (Serial.available()) {
+    String line = Serial.readStringUntil('\n');
+    line.trim();
+    if (!line.startsWith("{")) continue;
+    StaticJsonDocument<512> doc;
+    if (deserializeJson(doc, line)) continue;
+    if (doc["cmd"] == "describe") sendDescribe();
+    else if (doc["cmd"] == "set") applySet(doc.as<JsonObject>());
+    else if (doc["cmd"] == "press") { /* кнопок нет */ }
+  }
+
+  uint32_t now = millis();
+  if (gPower && now - gLast > 30) {
+    gLast = now;
+    if (gUseFixed) {
+      // статичный выбранный цвет с лёгким "дыханием"
+      float b = 0.5f + 0.5f * sin(gPhase);
+      leds[0] = gFixed;
+      leds[0].nscale8(120 + 135 * b);
+    } else {
+      gPhase += 0.02f * gSpeed / 6.0f;
+      leds[0] = ColorFromPalette(palette, (uint8_t)(gPhase * 16), 255, LINEARBLEND);
     }
-}
-
-void handleCommand(const String& command) {
-    StaticJsonDocument<200> doc;
-    deserializeJson(doc, command);
-
-    if (doc["cmd"].is<String>()) {
-        const char* cmd = doc["cmd"];
-
-        if (strcmp(cmd, "describe") == 0) {
-            describe();
-        } else if (strcmp(cmd, "set") == 0 && doc["module"] == "rgb") {
-            const char* id = doc["id"];
-            int value = doc["value"];
-            if (strcmp(id, "red") == 0) {
-                redValue = value;
-            } else if (strcmp(id, "green") == 0) {
-                greenValue = value;
-            } else if (strcmp(id, "blue") == 0) {
-                blueValue = value;
-            }
-            setRGB(redValue, greenValue, blueValue);
-        }
-    }
-}
-
-void setRGB(int red, int green, int blue) {
-    ledcWrite(0, red);
-    ledcWrite(1, green);
-    ledcWrite(2, blue);
-
-    // Отправляем обновленное состояние цвета
-    String rgbResponse = "{\"type\":\"update\",\"module\":\"rgb\",\"id\":\"color\",\"value\":\"rgb(" + String(red) + ", " + String(green) + ", " + String(blue) + ")\"}";
-    Serial.println(rgbResponse);
-}
-
-void describe() {
-    String response = "{\"type\":\"describe\",\"firmware\":\"RGB Controller\",\"version\":\"1.0\",\"modules\":[{\"id\":\"rgb\",\"name\":\"RGB LED\",\"controls\":[{\"id\":\"red\",\"type\":\"slider\",\"label\":\"Red\",\"min\":0,\"max\":255,\"value\":" + String(redValue) + "},{\"id\":\"green\",\"type\":\"slider\",\"label\":\"Green\",\"min\":0,\"max\":255,\"value\":" + String(greenValue) + "},{\"id\":\"blue\",\"type\":\"slider\",\"label\":\"Blue\",\"min\":0,\"max\":255,\"value\":" + String(blueValue) + "}]}]}";
-    Serial.println(response);
+    FastLED.show();
+  } else if (!gPower) {
+    leds[0] = CRGB::Black;
+    FastLED.show();
+  }
 }
