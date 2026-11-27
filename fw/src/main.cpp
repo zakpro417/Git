@@ -18,44 +18,45 @@ const CRGBPalette16 palette = CRGBPalette16(
 bool  gPower = true;
 float gPhase = 0.0;
 uint32_t gLast = 0;
+int gSpeed = 6;
+CRGB gFixed = CRGB::Red;
+bool gUseFixed = false;
 
 void sendDescribe() {
-  StaticJsonDocument<1024> doc;
+  JsonDocument doc;
   doc["type"] = "describe";
   doc["firmware"] = "RGB Blink ESP32-S3";
-  doc["version"] = "1.0";
+  doc["version"] = "1.1";
 
-  JsonObject mod = doc.createNestedObject("modules");
-  mod.createNestedObject("id"); // placeholder removed below
-  doc["modules"].remove(0);
+  JsonArray mods = doc["modules"].to<JsonArray>();
 
-  JsonObject m = doc["modules"].createNestedObject();
+  JsonObject m = mods.add<JsonObject>();
   m["id"] = "rgb";
   m["name"] = "RGB LED";
 
-  JsonArray c = m.createNestedArray("controls");
-  JsonObject o = c.createNestedObject();
-  o["id"] = "power"; o["type"] = "switch"; o["label"] = "Power"; o["value"] = true;
+  JsonArray c = m["controls"].to<JsonArray>();
 
-  o = c.createNestedObject();
+  JsonObject o = c.add<JsonObject>();
+  o["id"] = "power"; o["type"] = "switch"; o["label"] = "Power"; o["value"] = gPower;
+
+  o = c.add<JsonObject>();
   o["id"] = "speed"; o["type"] = "slider"; o["label"] = "Speed";
-  o["min"] = 1; o["max"] = 20; o["value"] = 6;
+  o["min"] = 1; o["max"] = 20; o["value"] = gSpeed;
 
-  o = c.createNestedObject();
+  o = c.add<JsonObject>();
   o["id"] = "bright"; o["type"] = "slider"; o["label"] = "Brightness";
   o["min"] = 0; o["max"] = 255; o["value"] = BRIGHTNESS;
 
-  o = c.createNestedObject();
+  o = c.add<JsonObject>();
   o["id"] = "color"; o["type"] = "color"; o["label"] = "Color"; o["value"] = "#FF0000";
+
+  o = c.add<JsonObject>();
+  o["id"] = "reset"; o["type"] = "button"; o["label"] = "Reset";
 
   String out;
   serializeJson(doc, out);
   Serial.println(out);
 }
-
-int gSpeed = 6;
-CRGB gFixed = CRGB::Red;
-bool gUseFixed = false;
 
 void applySet(JsonObject root) {
   String id = root["id"] | "";
@@ -74,6 +75,16 @@ void applySet(JsonObject root) {
   }
 }
 
+void doReset() {
+  gPower = true;
+  gSpeed = 6;
+  gUseFixed = false;
+  gPhase = 0.0;
+  FastLED.setBrightness(BRIGHTNESS);
+  Serial.println("{\"type\":\"update\",\"module\":\"rgb\",\"id\":\"power\",\"value\":true}");
+  Serial.println("{\"type\":\"update\",\"module\":\"rgb\",\"id\":\"speed\",\"value\":6}");
+}
+
 void setup() {
   Serial.begin(115200);
   delay(300);
@@ -90,11 +101,15 @@ void loop() {
     String line = Serial.readStringUntil('\n');
     line.trim();
     if (!line.startsWith("{")) continue;
-    StaticJsonDocument<512> doc;
+    JsonDocument doc;
     if (deserializeJson(doc, line)) continue;
-    if (doc["cmd"] == "describe") sendDescribe();
-    else if (doc["cmd"] == "set") applySet(doc.as<JsonObject>());
-    else if (doc["cmd"] == "press") { /* кнопок нет */ }
+    String cmd = doc["cmd"] | "";
+    if (cmd == "describe") sendDescribe();
+    else if (cmd == "set") applySet(doc.as<JsonObject>());
+    else if (cmd == "press") {
+      String id = doc["id"] | "";
+      if (id == "reset") doReset();
+    }
   }
 
   uint32_t now = millis();
@@ -105,6 +120,7 @@ void loop() {
       float b = 0.5f + 0.5f * sin(gPhase);
       leds[0] = gFixed;
       leds[0].nscale8(120 + 135 * b);
+      gPhase += 0.05f;
     } else {
       gPhase += 0.02f * gSpeed / 6.0f;
       leds[0] = ColorFromPalette(palette, (uint8_t)(gPhase * 16), 255, LINEARBLEND);
