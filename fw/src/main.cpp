@@ -1,133 +1,135 @@
 #include <Arduino.h>
-#include <FastLED.h>
+#include <WiFi.h>
 #include <ArduinoJson.h>
 
-#define LED_PIN    46
-#define NUM_LEDS   1
-#define BRIGHTNESS 60
+const char* AP_SSID = "ESP32-AP";
+const char* AP_PASS = "12345678";
 
-CRGB leds[NUM_LEDS];
-
-// Палитра: плавный перебор цветов
-const CRGBPalette16 palette = CRGBPalette16(
-  CRGB::Red, CRGB::OrangeRed, CRGB::Gold, CRGB::Yellow,
-  CRGB::Green, CRGB::Aquamarine, CRGB::Cyan, CRGB::Blue,
-  CRGB::Blue, CRGB::BlueViolet, CRGB::Magenta, CRGB::Pink,
-  CRGB::Red, CRGB::OrangeRed, CRGB::Gold, CRGB::Yellow);
-
-bool  gPower = true;
-float gPhase = 0.0;
-uint32_t gLast = 0;
-int gSpeed = 6;
-CRGB gFixed = CRGB::Red;
-bool gUseFixed = false;
+bool  gApActive = false;
+int   gApChannel = 6;
+int   gMaxClients = 4;
 
 void sendDescribe() {
   JsonDocument doc;
   doc["type"] = "describe";
-  doc["firmware"] = "RGB Blink ESP32-S3";
-  doc["version"] = "1.1";
+  doc["firmware"] = "WiFi AP Control";
+  doc["version"] = "1.0";
 
   JsonArray mods = doc["modules"].to<JsonArray>();
 
   JsonObject m = mods.add<JsonObject>();
-  m["id"] = "rgb";
-  m["name"] = "RGB LED";
+  m["id"] = "ap";
+  m["name"] = "Access Point";
 
-  JsonArray c = m["controls"].to<JsonArray>();
+  JsonArray ctrls = m["controls"].to<JsonArray>();
 
-  JsonObject o = c.add<JsonObject>();
-  o["id"] = "power"; o["type"] = "switch"; o["label"] = "Power"; o["value"] = gPower;
+  JsonObject c1 = ctrls.add<JsonObject>();
+  c1["id"] = "power";
+  c1["type"] = "switch";
+  c1["label"] = "AP Enable";
+  c1["value"] = gApActive;
 
-  o = c.add<JsonObject>();
-  o["id"] = "speed"; o["type"] = "slider"; o["label"] = "Speed";
-  o["min"] = 1; o["max"] = 20; o["value"] = gSpeed;
+  JsonObject c2 = ctrls.add<JsonObject>();
+  c2["id"] = "channel";
+  c2["type"] = "slider";
+  c2["label"] = "Channel";
+  c2["min"] = 1;
+  c2["max"] = 13;
+  c2["value"] = gApChannel;
 
-  o = c.add<JsonObject>();
-  o["id"] = "bright"; o["type"] = "slider"; o["label"] = "Brightness";
-  o["min"] = 0; o["max"] = 255; o["value"] = BRIGHTNESS;
+  JsonObject c3 = ctrls.add<JsonObject>();
+  c3["id"] = "maxclients";
+  c3["type"] = "slider";
+  c3["label"] = "Max Clients";
+  c3["min"] = 1;
+  c3["max"] = 8;
+  c3["value"] = gMaxClients;
 
-  o = c.add<JsonObject>();
-  o["id"] = "color"; o["type"] = "color"; o["label"] = "Color"; o["value"] = "#FF0000";
+  JsonObject c4 = ctrls.add<JsonObject>();
+  c4["id"] = "reset";
+  c4["type"] = "button";
+  c4["label"] = "Restart AP";
 
-  o = c.add<JsonObject>();
-  o["id"] = "reset"; o["type"] = "button"; o["label"] = "Reset";
-
-  String out;
-  serializeJson(doc, out);
-  Serial.println(out);
+  serializeJson(doc, Serial);
+  Serial.println();
 }
 
-void applySet(JsonObject root) {
-  String id = root["id"] | "";
-  JsonVariant v = root["value"];
-  if (id == "power") gPower = v.as<bool>();
-  else if (id == "speed") gSpeed = v.as<int>();
-  else if (id == "bright") FastLED.setBrightness(v.as<int>());
-  else if (id == "color") {
-    String s = v.as<String>();
-    if (s.length() == 7 && s[0] == '#') {
-      gFixed = CRGB(strtol(s.substring(1,3).c_str(), nullptr, 16),
-                    strtol(s.substring(3,5).c_str(), nullptr, 16),
-                    strtol(s.substring(5,7).c_str(), nullptr, 16));
-      gUseFixed = true;
+void sendUpdate(const char* module, const char* id, const char* value) {
+  JsonDocument doc;
+  doc["type"] = "update";
+  doc["module"] = module;
+  doc["id"] = id;
+  doc["value"] = value;
+  serializeJson(doc, Serial);
+  Serial.println();
+}
+
+void startAP() {
+  WiFi.softAP(AP_SSID, AP_PASS, gApChannel, false, gMaxClients);
+  gApActive = true;
+  IPAddress ip = WiFi.softAPIP();
+  sendUpdate("ap", "power", "true");
+  Serial.printf("AP started: %s, IP: %s, Ch: %d, Max: %d\n", AP_SSID, ip.toString().c_str(), gApChannel, gMaxClients);
+}
+
+void stopAP() {
+  WiFi.softAPdisconnect(true);
+  gApActive = false;
+  sendUpdate("ap", "power", "false");
+  Serial.println("AP stopped");
+}
+
+void handleCmd(JsonDocument& doc) {
+  const char* cmd = doc["cmd"];
+  const char* module = doc["module"];
+  const char* id = doc["id"];
+
+  if (strcmp(cmd, "describe") == 0) {
+    sendDescribe();
+    return;
+  }
+
+  if (strcmp(module, "ap") != 0) return;
+
+  if (strcmp(cmd, "set") == 0) {
+    if (strcmp(id, "power") == 0) {
+      bool val = doc["value"];
+      if (val && !gApActive) startAP();
+      else if (!val && gApActive) stopAP();
+    }
+    else if (strcmp(id, "channel") == 0) {
+      gApChannel = doc["value"];
+      sendUpdate("ap", "channel", String(gApChannel).c_str());
+      if (gApActive) { stopAP(); startAP(); }
+    }
+    else if (strcmp(id, "maxclients") == 0) {
+      gMaxClients = doc["value"];
+      sendUpdate("ap", "maxclients", String(gMaxClients).c_str());
+      if (gApActive) { stopAP(); startAP(); }
     }
   }
-}
-
-void doReset() {
-  gPower = true;
-  gSpeed = 6;
-  gUseFixed = false;
-  gPhase = 0.0;
-  FastLED.setBrightness(BRIGHTNESS);
-  Serial.println("{\"type\":\"update\",\"module\":\"rgb\",\"id\":\"power\",\"value\":true}");
-  Serial.println("{\"type\":\"update\",\"module\":\"rgb\",\"id\":\"speed\",\"value\":6}");
+  else if (strcmp(cmd, "press") == 0) {
+    if (strcmp(id, "reset") == 0) {
+      if (gApActive) { stopAP(); startAP(); }
+    }
+  }
 }
 
 void setup() {
   Serial.begin(115200);
-  delay(300);
-  FastLED.addLeds<WS2812, LED_PIN, GRB>(leds, NUM_LEDS);
-  FastLED.setBrightness(BRIGHTNESS);
-  gLast = millis();
+  delay(100);
+  Serial.println("\nWiFi AP Control ready");
   sendDescribe();
-  Serial.println("RGB blink ready");
 }
 
 void loop() {
-  // приём команд
-  while (Serial.available()) {
+  if (Serial.available()) {
     String line = Serial.readStringUntil('\n');
     line.trim();
-    if (!line.startsWith("{")) continue;
-    JsonDocument doc;
-    if (deserializeJson(doc, line)) continue;
-    String cmd = doc["cmd"] | "";
-    if (cmd == "describe") sendDescribe();
-    else if (cmd == "set") applySet(doc.as<JsonObject>());
-    else if (cmd == "press") {
-      String id = doc["id"] | "";
-      if (id == "reset") doReset();
+    if (line.startsWith("{")) {
+      JsonDocument doc;
+      DeserializationError err = deserializeJson(doc, line);
+      if (!err) handleCmd(doc);
     }
-  }
-
-  uint32_t now = millis();
-  if (gPower && now - gLast > 30) {
-    gLast = now;
-    if (gUseFixed) {
-      // статичный выбранный цвет с лёгким "дыханием"
-      float b = 0.5f + 0.5f * sin(gPhase);
-      leds[0] = gFixed;
-      leds[0].nscale8(120 + 135 * b);
-      gPhase += 0.05f;
-    } else {
-      gPhase += 0.02f * gSpeed / 6.0f;
-      leds[0] = ColorFromPalette(palette, (uint8_t)(gPhase * 16), 255, LINEARBLEND);
-    }
-    FastLED.show();
-  } else if (!gPower) {
-    leds[0] = CRGB::Black;
-    FastLED.show();
   }
 }
