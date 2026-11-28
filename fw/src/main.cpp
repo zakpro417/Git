@@ -29,7 +29,8 @@ static void sendJson(JsonDocument &doc) {
 }
 
 static void sendDescribe();
-n\nstatic void pushUpdateStr(const char *id, const String &val) {
+
+static void pushUpdateStr(const char *id, const String &val) {
   JsonDocument d;
   d["type"] = "update";
   d["module"] = "rgb";
