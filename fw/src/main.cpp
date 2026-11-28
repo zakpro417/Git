@@ -100,7 +100,7 @@ static void sendDescribe() {
   JsonDocument doc;
   doc["type"] = "describe";
   doc["firmware"] = "RGB WiFi";
-  doc["version"] = "5.0";
+  doc["version"] = "5.1";
   JsonObject mod = doc["modules"].to<JsonArray>().add<JsonObject>();
   mod["id"] = "rgb";
   mod["name"] = "RGB WiFi";
@@ -156,7 +156,10 @@ static void handleLine(const String &line) {
         applyLed();
       }
     }
-    else if (!strcmp(id, "pass")) { passVal = doc["value"].as<String>(); }
+    else if (!strcmp(id, "pass")) {
+      passVal = doc["value"].as<String>();
+      if (passVal.length() >= 8 && selectedSsid.length() > 0 && WiFi.status() != WL_CONNECTED) connectWiFi(selectedSsid, passVal);
+    }
     else if (!strcmp(id, "network")) { selectedSsid = doc["value"].as<String>(); }
     return;
   }
