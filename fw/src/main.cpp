@@ -210,4 +210,4 @@ void loop() {
     lastConn = millis();
     if (WiFi.status() == WL_CONNECTED) pushUpdateStr("wifi_status", "Connected: " + WiFi.localIP().toString());
   }
-}\n
+}
