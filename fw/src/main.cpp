@@ -1,71 +1,94 @@
 #include <Arduino.h>
 #include <ArduinoJson.h>
+#include <WiFi.h>
 
-void sendDescribe() {
-  JsonDocument doc;
-  doc["type"] = "describe";
-  doc["firmware"] = "WiFi AP Control";
-  doc["version"] = "1.0";
+static const char *AP_SSID = "ESP-Control";
+static const char *AP_PASS = "12345678";
+static bool apOn = false;
 
-  JsonArray mods = doc["modules"].to<JsonArray>();
-  JsonObject m = mods.add<JsonObject>();
-  m["id"] = "ap";
-  m["name"] = "Access Point";
-
-  JsonArray c = m["controls"].to<JsonArray>();
-
-  JsonObject power = c.add<JsonObject>();
-  power["id"] = "power";
-  power["type"] = "switch";
-  power["label"] = "AP Enable";
-  power["value"] = false;
-
-  JsonObject ch = c.add<JsonObject>();
-  ch["id"] = "channel";
-  ch["type"] = "slider";
-  ch["label"] = "Channel";
-  ch["min"] = 1;
-  ch["max"] = 13;
-  ch["value"] = 6;
-
-  JsonObject mc = c.add<JsonObject>();
-  mc["id"] = "maxclients";
-  mc["type"] = "slider";
-  mc["label"] = "Max Clients";
-  mc["min"] = 1;
-  mc["max"] = 8;
-  mc["value"] = 4;
-
-  JsonObject restart = c.add<JsonObject>();
-  restart["id"] = "restart";
-  restart["type"] = "button";
-  restart["label"] = "Restart AP";
-
-  JsonObject status = c.add<JsonObject>();
-  status["id"] = "status";
-  status["type"] = "readout";
-  status["label"] = "Status";
-  status["value"] = "Idle";
-
+static void sendJson(JsonDocument &doc) {
   serializeJson(doc, Serial);
   Serial.println();
 }
 
+static void pushUpdate(const char *id, const String &val) {
+  JsonDocument d;
+  d["type"] = "update";
+  d["module"] = "wifi";
+  d["id"] = id;
+  d["value"] = val;
+  sendJson(d);
+}
+
+static void setAp(bool on) {
+  apOn = on;
+  if (on) {
+    WiFi.softAP(AP_SSID, AP_PASS);
+    pushUpdate("ap", true);
+    pushUpdate("ssid", AP_SSID);
+    pushUpdate("ip", WiFi.softAPIP().toString());
+    pushUpdate("status", "AP active");
+  } else {
+    WiFi.softAPdisconnect(true);
+    pushUpdate("ap", false);
+    pushUpdate("ip", "-");
+    pushUpdate("status", "Idle");
+  }
+}
+
+static void sendDescribe() {
+  JsonDocument doc;
+  doc["type"] = "describe";
+  doc["firmware"] = "WiFi AP Minimal";
+  doc["version"] = "1.0";
+  JsonArray mods = doc["modules"].to<JsonArray>();
+  JsonObject m = mods.add<JsonObject>();
+  m["id"] = "wifi";
+  m["name"] = "Access Point";
+  JsonArray c = m["controls"].to<JsonArray>();
+  JsonObject sw = c.add<JsonObject>();
+  sw["id"] = "ap";
+  sw["type"] = "switch";
+  sw["label"] = "Access Point";
+  sw["value"] = apOn;
+  JsonObject s = c.add<JsonObject>();
+  s["id"] = "ssid";
+  s["type"] = "readout";
+  s["label"] = "SSID";
+  s["value"] = AP_SSID;
+  JsonObject ip = c.add<JsonObject>();
+  ip["id"] = "ip";
+  ip["type"] = "readout";
+  ip["label"] = "IP";
+  ip["value"] = apOn ? WiFi.softAPIP().toString() : "-";
+  JsonObject st = c.add<JsonObject>();
+  st["id"] = "status";
+  st["type"] = "readout";
+  st["label"] = "Status";
+  st["value"] = apOn ? "AP active" : "Idle";
+  sendJson(doc);
+}
+
 void setup() {
   Serial.begin(115200);
-  delay(500);
-  Serial.println("Starting...");
+  delay(300);
   sendDescribe();
-  Serial.println("Setup done");
 }
 
 void loop() {
   if (Serial.available()) {
     String line = Serial.readStringUntil('\n');
     line.trim();
-    if (line.startsWith("{")) {
-      Serial.println("Received: " + line);
+    if (!line.startsWith("{")) return;
+    JsonDocument doc;
+    if (deserializeJson(doc, line)) return;
+    const char *cmd = doc["cmd"] | "";
+    if (strcmp(cmd, "describe") == 0) {
+      sendDescribe();
+    } else if (strcmp(cmd, "set") == 0) {
+      const char *id = doc["id"] | "";
+      if (strcmp(id, "ap") == 0) setAp(doc["value"] | false);
     }
   }
-  delay(100);
+  delay(10);
 }
