@@ -70,39 +70,71 @@ static void loadWiFiConfig() {
   storedSsid = prefs.getString("ssid", "");
   storedPass = prefs.getString("pass", "");
   prefs.end();
-  Serial.printf("Loaded WiFi: %s\n", storedSsid.c_str());
+}
+
+static String wifiStatusStr() {
+  String s;
+  if (WiFi.status() == WL_CONNECTED) {
+    s = "WiFi: " + WiFi.localIP().toString() + " | AP: " + WiFi.softAPIP().toString();
+  } else {
+    s = "AP: " + WiFi.softAPIP().toString() + " (not connected)";
+  }
+  return s;
 }
 
 static void startAP() {
-  WiFi.mode(WIFI_AP);
+  WiFi.mode(WIFI_AP_STA);
   WiFi.softAP("ESP-RGB", "12345678");
   Serial.printf("AP started IP: %s\n", WiFi.softAPIP().toString().c_str());
 }
 
-static void connectWiFi() {
-  if (storedSsid.length() == 0) return;
-  WiFi.mode(WIFI_STA);
-  WiFi.begin(storedSsid.c_str(), storedPass.c_str());
+static bool tryConnect(const String &ssid, const String &pass) {
+  WiFi.mode(WIFI_AP_STA);
+  WiFi.begin(ssid.c_str(), pass.c_str());
+  Serial.printf("Connecting to %s", ssid.c_str());
   int w = 0;
   while (WiFi.status() != WL_CONNECTED && w < 20) {
     delay(500);
     Serial.print(".");
     w++;
   }
-  if (WiFi.status() == WL_CONNECTED) {
+  bool ok = (WiFi.status() == WL_CONNECTED);
+  if (ok) {
     Serial.println("\nWiFi connected! IP: " + WiFi.localIP().toString());
-    WiFi.softAPdisconnect(true);
   } else {
-    Serial.println("\nWiFi connect failed, starting AP mode");
-    startAP();
+    Serial.println("\nWiFi connect failed");
   }
+  return ok;
+}
+
+static void scanWiFi() {
+  pushUpdateStr("wifi_status", "Scanning...");
+  int n = WiFi.scanNetworks();
+  Serial.printf("Found %d networks\n", n);
+  String list;
+  if (n <= 0) {
+    list = "(none found)";
+  } else {
+    if (n > 10) n = 10;
+    for (int i = 0; i < n; i++) {
+      if (i > 0) list += ", ";
+      list += WiFi.SSID(i);
+      list += " (";
+      list += String(WiFi.RSSI(i));
+      list += "dBm)";
+    }
+  }
+  WiFi.scanDelete();
+  pushUpdateStr("networks", list);
+  pushUpdateStr("wifi_status", wifiStatusStr());
+  Serial.println("Networks: " + list);
 }
 
 static void sendDescribe() {
   JsonDocument doc;
   doc["type"] = "describe";
   doc["firmware"] = "RGB WiFi";
-  doc["version"] = "2.0";
+  doc["version"] = "3.0";
   JsonArray mods = doc["modules"].to<JsonArray>();
   JsonObject m = mods.add<JsonObject>();
   m["id"] = "rgb";
@@ -116,6 +148,10 @@ static void sendDescribe() {
   bri["id"] = "brightness"; bri["type"] = "slider"; bri["label"] = "Brightness"; bri["min"] = 0; bri["max"] = 255; bri["value"] = brightness;
   JsonObject rain = c.add<JsonObject>();
   rain["id"] = "rainbow"; rain["type"] = "button"; rain["label"] = "Rainbow Demo";
+  JsonObject scan = c.add<JsonObject>();
+  scan["id"] = "scan_wifi"; scan["type"] = "button"; scan["label"] = "Scan WiFi";
+  JsonObject nets = c.add<JsonObject>();
+  nets["id"] = "networks"; nets["type"] = "readout"; nets["label"] = "Networks"; nets["value"] = "(press Scan WiFi)";
   JsonObject ssid = c.add<JsonObject>();
   ssid["id"] = "ssid"; ssid["type"] = "text"; ssid["label"] = "WiFi SSID"; ssid["value"] = storedSsid;
   JsonObject pass = c.add<JsonObject>();
@@ -123,9 +159,7 @@ static void sendDescribe() {
   JsonObject conn = c.add<JsonObject>();
   conn["id"] = "connect_wifi"; conn["type"] = "button"; conn["label"] = "Connect WiFi";
   JsonObject wf = c.add<JsonObject>();
-  wf["id"] = "wifi_status"; wf["type"] = "readout"; wf["label"] = "WiFi Status";
-  String status = (WiFi.status() == WL_CONNECTED) ? ("Connected: " + WiFi.localIP().toString()) : ("AP: " + WiFi.softAPIP().toString());
-  wf["value"] = status;
+  wf["id"] = "wifi_status"; wf["type"] = "readout"; wf["label"] = "WiFi Status"; wf["value"] = wifiStatusStr();
   sendJson(doc);
 }
 
@@ -156,7 +190,6 @@ static void handleLine(const String &line) {
       pushUpdateInt("brightness", brightness);
     } else if (!strcmp(id, "ssid")) {
       storedSsid = doc["value"].as<String>();
-      pushUpdateStr("ssid", storedSsid);
     } else if (!strcmp(id, "pass")) {
       storedPass = doc["value"].as<String>();
     }
@@ -171,38 +204,48 @@ static void handleLine(const String &line) {
         delay(20);
       }
       setColor(r, g, b);
+    } else if (!strcmp(id, "scan_wifi")) {
+      scanWiFi();
     } else if (!strcmp(id, "connect_wifi")) {
       if (storedSsid.length() > 0) {
-        saveWiFiConfig();
-        Serial.println("WiFi saved, restarting...");
-        pushUpdateStr("wifi_status", "Saving... restart");
-        delay(500);
-        ESP.restart();
+        pushUpdateStr("wifi_status", "Connecting...");
+        bool ok = tryConnect(storedSsid, storedPass);
+        if (ok) {
+          saveWiFiConfig();
+        }
+        pushUpdateStr("wifi_status", wifiStatusStr());
+      } else {
+        pushUpdateStr("wifi_status", "Enter SSID first!");
       }
     }
   }
 }
 
 static const char htmlPage[] PROGMEM = R"rawliteral(
-<!DOCTYPE html><html><head><meta name='viewport' content='width=device-width, initial-scale=1'><title>ESP WiFi</title></head><body><h2>Connect to WiFi</h2><form action='/wifi_save' method='GET'>
-SSID: <input type='text' name='ssid' value='%SSID%' required><br>Password: <input type='password' name='pass' required><br><br><button type='submit'>Save & Connect</button></form></body></html>
+<!DOCTYPE html><html><head><meta name='viewport' content='width=device-width, initial-scale=1'><title>ESP WiFi</title></head><body><h2>WiFi setup</h2><p><a href='/scan'>Scan networks</a></p><div id='n'></div><form action='/wifi_save' method='GET'>
+SSID: <input type='text' name='ssid' value='' required><br>Password: <input type='password' name='pass'><br><br><button type='submit'>Save & Connect</button></form></body></html>
 )rawliteral";
-
-static void sendHtmlPage(WiFiClient &client) {
-  String page = htmlPage;
-  page.replace("%SSID%", storedSsid);
-  client.println("HTTP/1.1 200 OK");
-  client.println("Content-Type: text/html");
-  client.println("Connection: close");
-  client.println();
-  client.print(page);
-}
 
 static void handleWebServer() {
   WiFiClient client = server.available();
   if (!client) return;
   String req = client.readStringUntil('\r');
   client.flush();
+  if (req.indexOf("GET /scan") >= 0) {
+    int n = WiFi.scanNetworks();
+    String body = "Found networks:\n";
+    for (int i = 0; i < n && i < 15; i++) {
+      body += WiFi.SSID(i) + " (" + String(WiFi.RSSI(i)) + " dBm)\n";
+    }
+    WiFi.scanDelete();
+    client.println("HTTP/1.1 200 OK");
+    client.println("Content-Type: text/plain");
+    client.println("Connection: close");
+    client.println();
+    client.print(body);
+    client.stop();
+    return;
+  }
   if (req.indexOf("GET /wifi_save") >= 0) {
     int qs = req.indexOf('?');
     if (qs >= 0) {
@@ -213,17 +256,17 @@ static void handleWebServer() {
       String p = (passIdx >= 0) ? query.substring(passIdx + 5) : "";
       int amp = s.indexOf('&');
       if (amp >= 0) s = s.substring(0, amp);
-      if (s.length() > 0 && p.length() > 0) {
+      if (s.length() > 0) {
         storedSsid = s;
         storedPass = p;
         saveWiFiConfig();
+        tryConnect(storedSsid, storedPass);
         client.println("HTTP/1.1 200 OK");
         client.println("Content-Type: text/plain");
         client.println("Connection: close");
         client.println();
-        client.println("Saving... restarting");
-        delay(500);
-        ESP.restart();
+        client.println(wifiStatusStr());
+        client.stop();
         return;
       }
     }
@@ -231,7 +274,11 @@ static void handleWebServer() {
     return;
   }
   if (req.indexOf("GET /") >= 0) {
-    sendHtmlPage(client);
+    client.println("HTTP/1.1 200 OK");
+    client.println("Content-Type: text/html");
+    client.println("Connection: close");
+    client.println();
+    client.print(htmlPage);
   }
   client.stop();
 }
@@ -244,13 +291,13 @@ void setup() {
   strip.show();
   setColor(0, 0, 0);
   loadWiFiConfig();
+  startAP();
   if (storedSsid.length() > 0) {
-    connectWiFi();
-  } else {
-    startAP();
+    tryConnect(storedSsid, storedPass);
   }
   server.begin();
   sendDescribe();
+  pushUpdateStr("wifi_status", wifiStatusStr());
 }
 
 void loop() {
