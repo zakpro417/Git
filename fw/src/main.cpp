@@ -11,7 +11,16 @@ static void sendJson(JsonDocument &doc) {
   Serial.println();
 }
 
-static void pushUpdate(const char *id, const JsonVariantConst &val) {
+static void pushUpdateStr(const char *id, const String &val) {
+  JsonDocument d;
+  d["type"] = "update";
+  d["module"] = "wifi";
+  d["id"] = id;
+  d["value"] = val;
+  sendJson(d);
+}
+
+static void pushUpdateBool(const char *id, bool val) {
   JsonDocument d;
   d["type"] = "update";
   d["module"] = "wifi";
@@ -24,15 +33,15 @@ static void setAp(bool on) {
   apOn = on;
   if (on) {
     WiFi.softAP(AP_SSID, AP_PASS);
-    pushUpdate("ap", true);
-    pushUpdate("ssid", AP_SSID);
-    pushUpdate("ip", WiFi.softAPIP().toString().c_str());
-    pushUpdate("status", "AP active");
+    pushUpdateBool("ap", true);
+    pushUpdateStr("ssid", AP_SSID);
+    pushUpdateStr("ip", WiFi.softAPIP().toString());
+    pushUpdateStr("status", "AP active");
   } else {
     WiFi.softAPdisconnect(true);
-    pushUpdate("ap", false);
-    pushUpdate("ip", "-");
-    pushUpdate("status", "Idle");
+    pushUpdateBool("ap", false);
+    pushUpdateStr("ip", "-");
+    pushUpdateStr("status", "Idle");
   }
 }
 
@@ -46,63 +55,58 @@ static void sendDescribe() {
   m["id"] = "wifi";
   m["name"] = "Access Point";
   JsonArray c = m["controls"].to<JsonArray>();
-
-  JsonObject ap = c.add<JsonObject>();
-  ap["id"] = "ap";
-  ap["type"] = "switch";
-  ap["label"] = "AP Enable";
-  ap["value"] = apOn;
-
-  JsonObject ssid = c.add<JsonObject>();
-  ssid["id"] = "ssid";
-  ssid["type"] = "readout";
-  ssid["label"] = "SSID";
-  ssid["value"] = AP_SSID;
-
-  JsonObject ip = c.add<JsonObject>();
-  ip["id"] = "ip";
-  ip["type"] = "readout";
-  ip["label"] = "IP";
-  ip["value"] = "-";
-
+  JsonObject power = c.add<JsonObject>();
+  power["id"] = "power";
+  power["type"] = "switch";
+  power["label"] = "AP Enable";
+  power["value"] = apOn;
+  JsonObject ch = c.add<JsonObject>();
+  ch["id"] = "channel";
+  ch["type"] = "slider";
+  ch["label"] = "Channel";
+  ch["min"] = 1;
+  ch["max"] = 13;
+  ch["value"] = 6;
+  JsonObject mc = c.add<JsonObject>();
+  mc["id"] = "maxclients";
+  mc["type"] = "slider";
+  mc["label"] = "Max Clients";
+  mc["min"] = 1;
+  mc["max"] = 8;
+  mc["value"] = 4;
   JsonObject status = c.add<JsonObject>();
   status["id"] = "status";
   status["type"] = "readout";
   status["label"] = "Status";
-  status["value"] = "Idle";
-
+  status["value"] = apOn ? "AP active" : "Idle";
   sendJson(doc);
+}
+
+static void handleLine(const String &line) {
+  JsonDocument doc;
+  if (deserializeJson(doc, line)) return;
+  const char *cmd = doc["cmd"] | "";
+  if (!strcmp(cmd, "describe")) { sendDescribe(); return; }
+  if (!strcmp(cmd, "set") && !strcmp(doc["id"] | "", "power")) {
+    setAp(doc["value"].as<bool>());
+  }
 }
 
 void setup() {
   Serial.begin(115200);
   delay(500);
-  Serial.println("Starting...");
   sendDescribe();
-  Serial.println("Setup done");
 }
 
 void loop() {
-  if (Serial.available()) {
-    String line = Serial.readStringUntil('\n');
-    line.trim();
-    if (!line.startsWith("{")) return;
-
-    JsonDocument doc;
-    DeserializationError err = deserializeJson(doc, line);
-    if (err) return;
-
-    const char *cmd = doc["cmd"];
-    if (!cmd) return;
-
-    if (strcmp(cmd, "describe") == 0) {
-      sendDescribe();
-    } else if (strcmp(cmd, "set") == 0) {
-      const char *mod = doc["module"];
-      const char *id = doc["id"];
-      if (mod && id && strcmp(mod, "wifi") == 0 && strcmp(id, "ap") == 0) {
-        setAp(doc["value"].as<bool>());
-      }
+  static String lineBuf;
+  while (Serial.available()) {
+    char c = Serial.read();
+    if (c == '\n') {
+      handleLine(lineBuf);
+      lineBuf = "";
+    } else if (c != '\r' && lineBuf.length() < 512) {
+      lineBuf += c;
     }
   }
 }
