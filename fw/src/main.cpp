@@ -6,16 +6,22 @@
 
 #define PIN_RGB 48
 #define NUM_PIXELS 1
+#define MAX_NETS 10
 
 Preferences prefs;
 Adafruit_NeoPixel strip(NUM_PIXELS, PIN_RGB, NEO_GRB + NEO_KHZ800);
-WiFiServer server(80);
 
 static bool ledOn = false;
 static uint8_t r = 0, g = 0, b = 255;
 static uint8_t brightness = 128;
 static String storedSsid = "";
 static String storedPass = "";
+static String selectedSsid = "";
+static String netSsid[MAX_NETS];
+static int netRssi[MAX_NETS];
+static int netEnc[MAX_NETS];
+static int netCount = 0;
+static unsigned long rainbowUntil = 0;
 
 static void sendJson(JsonDocument &doc) {
   serializeJson(doc, Serial);
@@ -49,238 +55,182 @@ static void pushUpdateInt(const char *id, int val) {
   sendJson(d);
 }
 
-static void setColor(uint8_t rr, uint8_t gg, uint8_t bb) {
-  if (!ledOn) { rr = 0; gg = 0; bb = 0; }
-  uint16_t valR = (uint16_t)rr * brightness / 255;
-  uint16_t valG = (uint16_t)gg * brightness / 255;
-  uint16_t valB = (uint16_t)bb * brightness / 255;
-  strip.setPixelColor(0, valR, valG, valB);
+static String colorHex() {
+  char buf[8];
+  snprintf(buf, sizeof(buf), "#%02X%02X%02X", r, g, b);
+  return String(buf);
+}
+
+static void hexToRgb(const String &hex) {
+  if (hex.length() >= 7 && hex[0] == '#') {
+    r = strtol(hex.substring(1, 3).c_str(), NULL, 16);
+    g = strtol(hex.substring(3, 5).c_str(), NULL, 16);
+    b = strtol(hex.substring(5, 7).c_str(), NULL, 16);
+  }
+}
+
+static void applyColor() {
+  strip.setBrightness(brightness);
+  if (ledOn) strip.setPixelColor(0, r, g, b);
+  else strip.setPixelColor(0, 0, 0, 0);
   strip.show();
 }
 
 static void saveWiFiConfig() {
-  prefs.begin("wifi", true);
+  prefs.begin("wifi", false);
   prefs.putString("ssid", storedSsid);
   prefs.putString("pass", storedPass);
   prefs.end();
 }
 
 static void loadWiFiConfig() {
-  prefs.begin("wifi", false);
+  prefs.begin("wifi", true);
   storedSsid = prefs.getString("ssid", "");
   storedPass = prefs.getString("pass", "");
   prefs.end();
 }
 
-static String wifiStatusStr() {
-  String s;
-  if (WiFi.status() == WL_CONNECTED) {
-    s = "WiFi: " + WiFi.localIP().toString() + " | AP: " + WiFi.softAPIP().toString();
-  } else {
-    s = "AP: " + WiFi.softAPIP().toString() + " (not connected)";
-  }
-  return s;
+static String statusStr() {
+  if (WiFi.status() == WL_CONNECTED) return "Connected: " + WiFi.localIP().toString();
+  return "AP: 192.168.4.1 (not connected)";
 }
 
 static void startAP() {
   WiFi.mode(WIFI_AP_STA);
-  WiFi.softAP("ESP-RGB", "12345678");
-  Serial.printf("AP started IP: %s\n", WiFi.softAPIP().toString().c_str());
+  WiFi.softAP("ESP-RGB");
+  Serial.println("AP started IP: 192.168.4.1");
 }
 
-static bool tryConnect(const String &ssid, const String &pass) {
+static bool connectWiFi(const String &ssid, const String &pass) {
+  pushUpdateStr("wifi_status", "Connecting to " + ssid + " ...");
   WiFi.mode(WIFI_AP_STA);
   WiFi.begin(ssid.c_str(), pass.c_str());
-  Serial.printf("Connecting to %s", ssid.c_str());
-  int w = 0;
-  while (WiFi.status() != WL_CONNECTED && w < 20) {
-    delay(500);
-    Serial.print(".");
-    w++;
+  unsigned long t0 = millis();
+  while (WiFi.status() != WL_CONNECTED && millis() - t0 < 15000) delay(200);
+  if (WiFi.status() == WL_CONNECTED) {
+    storedSsid = ssid;
+    storedPass = pass;
+    saveWiFiConfig();
+    pushUpdateStr("wifi_status", statusStr());
+    Serial.println("WiFi connected: " + WiFi.localIP().toString());
+    return true;
   }
-  bool ok = (WiFi.status() == WL_CONNECTED);
-  if (ok) {
-    Serial.println("\nWiFi connected! IP: " + WiFi.localIP().toString());
-  } else {
-    Serial.println("\nWiFi connect failed");
-  }
-  return ok;
+  pushUpdateStr("wifi_status", "Failed: " + ssid);
+  Serial.println("WiFi connect failed: " + ssid);
+  return false;
 }
 
 static void scanWiFi() {
-  pushUpdateStr("wifi_status", "Scanning...");
+  pushUpdateStr("networks", "Scanning...");
+  WiFi.mode(WIFI_AP_STA);
   int n = WiFi.scanNetworks();
-  Serial.printf("Found %d networks\n", n);
-  String list;
-  if (n <= 0) {
-    list = "(none found)";
-  } else {
-    if (n > 10) n = 10;
-    for (int i = 0; i < n; i++) {
-      if (i > 0) list += ", ";
-      list += WiFi.SSID(i);
-      list += " (";
-      list += String(WiFi.RSSI(i));
-      list += "dBm)";
-    }
+  if (n < 0) n = 0;
+  netCount = n > MAX_NETS ? MAX_NETS : n;
+  for (int i = 0; i < netCount; i++) {
+    netSsid[i] = WiFi.SSID(i);
+    netRssi[i] = WiFi.RSSI(i);
+    netEnc[i] = WiFi.encryptionType(i);
   }
   WiFi.scanDelete();
+  String list = "";
+  for (int i = 0; i < netCount; i++) {
+    if (i) list += ", ";
+    list += netSsid[i] + " (" + String(netRssi[i]) + "dBm)";
+  }
+  if (netCount == 0) list = "No networks found";
   pushUpdateStr("networks", list);
-  pushUpdateStr("wifi_status", wifiStatusStr());
-  Serial.println("Networks: " + list);
+  Serial.println("Scan: " + String(netCount) + " networks");
+  sendDescribe();
 }
 
 static void sendDescribe() {
   JsonDocument doc;
   doc["type"] = "describe";
   doc["firmware"] = "RGB WiFi";
-  doc["version"] = "3.0";
-  JsonArray mods = doc["modules"].to<JsonArray>();
-  JsonObject m = mods.add<JsonObject>();
-  m["id"] = "rgb";
-  m["name"] = "RGB WiFi";
-  JsonArray c = m["controls"].to<JsonArray>();
-  JsonObject pw = c.add<JsonObject>();
-  pw["id"] = "power"; pw["type"] = "switch"; pw["label"] = "Power"; pw["value"] = ledOn;
-  JsonObject col = c.add<JsonObject>();
-  col["id"] = "color"; col["type"] = "color"; col["label"] = "Color"; col["value"] = "#0000FF";
-  JsonObject bri = c.add<JsonObject>();
-  bri["id"] = "brightness"; bri["type"] = "slider"; bri["label"] = "Brightness"; bri["min"] = 0; bri["max"] = 255; bri["value"] = brightness;
-  JsonObject rain = c.add<JsonObject>();
-  rain["id"] = "rainbow"; rain["type"] = "button"; rain["label"] = "Rainbow Demo";
-  JsonObject scan = c.add<JsonObject>();
-  scan["id"] = "scan_wifi"; scan["type"] = "button"; scan["label"] = "Scan WiFi";
-  JsonObject nets = c.add<JsonObject>();
-  nets["id"] = "networks"; nets["type"] = "readout"; nets["label"] = "Networks"; nets["value"] = "(press Scan WiFi)";
-  JsonObject ssid = c.add<JsonObject>();
-  ssid["id"] = "ssid"; ssid["type"] = "text"; ssid["label"] = "WiFi SSID"; ssid["value"] = storedSsid;
-  JsonObject pass = c.add<JsonObject>();
+  doc["version"] = "4.0";
+  JsonObject mod = doc["modules"].to<JsonArray>().add<JsonObject>();
+  mod["id"] = "rgb";
+  mod["name"] = "RGB WiFi";
+  JsonArray ctl = mod["controls"].to<JsonArray>();
+
+  JsonObject sw = ctl.add<JsonObject>();
+  sw["id"] = "power"; sw["type"] = "switch"; sw["label"] = "Power"; sw["value"] = ledOn;
+
+  JsonObject col = ctl.add<JsonObject>();
+  col["id"] = "color"; col["type"] = "color"; col["label"] = "Color"; col["value"] = colorHex();
+
+  JsonObject br = ctl.add<JsonObject>();
+  br["id"] = "brightness"; br["type"] = "slider"; br["label"] = "Brightness";
+  br["min"] = 0; br["max"] = 255; br["value"] = (int)brightness;
+
+  JsonObject rb = ctl.add<JsonObject>();
+  rb["id"] = "rainbow"; rb["type"] = "button"; rb["label"] = "Rainbow Demo";
+
+  JsonObject sc = ctl.add<JsonObject>();
+  sc["id"] = "scan_wifi"; sc["type"] = "button"; sc["label"] = "Scan WiFi";
+
+  JsonObject net = ctl.add<JsonObject>();
+  net["id"] = "network"; net["type"] = "select"; net["label"] = "WiFi Network";
+  net["value"] = selectedSsid;
+  JsonArray opts = net["options"].to<JsonArray>();
+  for (int i = 0; i < netCount; i++) opts.add(netSsid[i]);
+
+  for (int i = 0; i < netCount; i++) {
+    JsonObject nb = ctl.add<JsonObject>();
+    nb["id"] = String("wifi_") + String(i);
+    nb["type"] = "button";
+    nb["label"] = netSsid[i] + " (" + String(netRssi[i]) + "dBm)";
+  }
+
+  JsonObject pass = ctl.add<JsonObject>();
   pass["id"] = "pass"; pass["type"] = "text"; pass["label"] = "WiFi Password"; pass["value"] = "";
-  JsonObject conn = c.add<JsonObject>();
-  conn["id"] = "connect_wifi"; conn["type"] = "button"; conn["label"] = "Connect WiFi";
-  JsonObject wf = c.add<JsonObject>();
-  wf["id"] = "wifi_status"; wf["type"] = "readout"; wf["label"] = "WiFi Status"; wf["value"] = wifiStatusStr();
+
+  JsonObject cn = ctl.add<JsonObject>();
+  cn["id"] = "connect_wifi"; cn["type"] = "button"; cn["label"] = "Connect WiFi";
+
+  JsonObject st = ctl.add<JsonObject>();
+  st["id"] = "wifi_status"; st["type"] = "readout"; st["label"] = "WiFi Status"; st["value"] = statusStr();
+
+  JsonObject lst = ctl.add<JsonObject>();
+  lst["id"] = "networks"; lst["type"] = "readout"; lst["label"] = "Networks";
+  lst["value"] = netCount > 0 ? String("Tap a network above") : String("(press Scan WiFi)");
+
   sendJson(doc);
 }
 
 static void handleLine(const String &line) {
   JsonDocument doc;
   if (deserializeJson(doc, line)) return;
-  const char* cmd = doc["cmd"] | "";
+  const char *cmd = doc["cmd"] | "";
+  const char *id = doc["id"] | "";
   if (!strcmp(cmd, "describe")) { sendDescribe(); return; }
   if (!strcmp(cmd, "set")) {
-    const char* id = doc["id"] | "";
-    if (!strcmp(id, "power")) {
-      ledOn = doc["value"].as<bool>();
-      setColor(r, g, b);
-      pushUpdateBool("power", ledOn);
-    } else if (!strcmp(id, "color")) {
-      const char* hex = doc["value"] | "#000000";
-      if (strlen(hex) == 7) {
-        unsigned long val = strtoul(hex + 1, NULL, 16);
-        r = (val >> 16) & 0xFF;
-        g = (val >> 8) & 0xFF;
-        b = val & 0xFF;
-      }
-      setColor(r, g, b);
-      pushUpdateStr("color", hex);
-    } else if (!strcmp(id, "brightness")) {
-      brightness = doc["value"].as<int>();
-      setColor(r, g, b);
-      pushUpdateInt("brightness", brightness);
-    } else if (!strcmp(id, "ssid")) {
-      storedSsid = doc["value"].as<String>();
-    } else if (!strcmp(id, "pass")) {
-      storedPass = doc["value"].as<String>();
-    }
-  } else if (!strcmp(cmd, "press")) {
-    const char* id = doc["id"] | "";
-    if (!strcmp(id, "rainbow")) {
-      for (int x = 0; x < 256; x++) {
-        if (x < 85) { r = x * 3; g = 255 - x * 3; b = 0; }
-        else if (x < 170) { int t = x - 85; r = 255 - t * 3; g = 0; b = t * 3; }
-        else { int t = x - 170; r = 0; g = t * 3; b = 255 - t * 3; }
-        setColor(r, g, b);
-        delay(20);
-      }
-      setColor(r, g, b);
-    } else if (!strcmp(id, "scan_wifi")) {
-      scanWiFi();
-    } else if (!strcmp(id, "connect_wifi")) {
-      if (storedSsid.length() > 0) {
-        pushUpdateStr("wifi_status", "Connecting...");
-        bool ok = tryConnect(storedSsid, storedPass);
-        if (ok) {
-          saveWiFiConfig();
-        }
-        pushUpdateStr("wifi_status", wifiStatusStr());
-      } else {
-        pushUpdateStr("wifi_status", "Enter SSID first!");
-      }
-    }
-  }
-}
-
-static const char htmlPage[] PROGMEM = R"rawliteral(
-<!DOCTYPE html><html><head><meta name='viewport' content='width=device-width, initial-scale=1'><title>ESP WiFi</title></head><body><h2>WiFi setup</h2><p><a href='/scan'>Scan networks</a></p><div id='n'></div><form action='/wifi_save' method='GET'>
-SSID: <input type='text' name='ssid' value='' required><br>Password: <input type='password' name='pass'><br><br><button type='submit'>Save & Connect</button></form></body></html>
-)rawliteral";
-
-static void handleWebServer() {
-  WiFiClient client = server.available();
-  if (!client) return;
-  String req = client.readStringUntil('\r');
-  client.flush();
-  if (req.indexOf("GET /scan") >= 0) {
-    int n = WiFi.scanNetworks();
-    String body = "Found networks:\n";
-    for (int i = 0; i < n && i < 15; i++) {
-      body += WiFi.SSID(i) + " (" + String(WiFi.RSSI(i)) + " dBm)\n";
-    }
-    WiFi.scanDelete();
-    client.println("HTTP/1.1 200 OK");
-    client.println("Content-Type: text/plain");
-    client.println("Connection: close");
-    client.println();
-    client.print(body);
-    client.stop();
+    if (!strcmp(id, "power")) { ledOn = doc["value"].as<bool>(); applyColor(); pushUpdateBool("power", ledOn); }
+    else if (!strcmp(id, "color")) { hexToRgb(doc["value"].as<String>()); applyColor(); pushUpdateStr("color", colorHex()); }
+    else if (!strcmp(id, "brightness")) { brightness = doc["value"].as<int>(); applyColor(); pushUpdateInt("brightness", brightness); }
+    else if (!strcmp(id, "network")) { selectedSsid = doc["value"].as<String>(); pushUpdateStr("wifi_status", "Selected: " + selectedSsid); }
+    else if (!strcmp(id, "pass")) { storedPass = doc["value"].as<String>(); }
     return;
   }
-  if (req.indexOf("GET /wifi_save") >= 0) {
-    int qs = req.indexOf('?');
-    if (qs >= 0) {
-      String query = req.substring(qs + 1);
-      int ssIdx = query.indexOf("ssid=");
-      int passIdx = query.indexOf("pass=");
-      String s = (ssIdx >= 0) ? query.substring(ssIdx + 5) : "";
-      String p = (passIdx >= 0) ? query.substring(passIdx + 5) : "";
-      int amp = s.indexOf('&');
-      if (amp >= 0) s = s.substring(0, amp);
-      if (s.length() > 0) {
-        storedSsid = s;
-        storedPass = p;
-        saveWiFiConfig();
-        tryConnect(storedSsid, storedPass);
-        client.println("HTTP/1.1 200 OK");
-        client.println("Content-Type: text/plain");
-        client.println("Connection: close");
-        client.println();
-        client.println(wifiStatusStr());
-        client.stop();
-        return;
+  if (!strcmp(cmd, "press")) {
+    if (!strcmp(id, "rainbow")) { rainbowUntil = millis() + 10000; }
+    else if (!strcmp(id, "scan_wifi")) { scanWiFi(); }
+    else if (!strcmp(id, "connect_wifi")) {
+      String s = selectedSsid.length() > 0 ? selectedSsid : storedSsid;
+      if (s.length() == 0) { pushUpdateStr("wifi_status", "No network selected"); return; }
+      connectWiFi(s, storedPass);
+    }
+    else if (strncmp(id, "wifi_", 5) == 0) {
+      int idx = String(id + 5).toInt();
+      if (idx >= 0 && idx < netCount) {
+        selectedSsid = netSsid[idx];
+        pushUpdateStr("network", selectedSsid);
+        pushUpdateStr("wifi_status", "Selected: " + selectedSsid + " (enter password, then Connect)");
+        Serial.println("Selected network: " + selectedSsid);
+        if (netEnc[idx] == WIFI_AUTH_OPEN) connectWiFi(selectedSsid, "");
       }
     }
-    client.stop();
-    return;
   }
-  if (req.indexOf("GET /") >= 0) {
-    client.println("HTTP/1.1 200 OK");
-    client.println("Content-Type: text/html");
-    client.println("Connection: close");
-    client.println();
-    client.print(htmlPage);
-  }
-  client.stop();
 }
 
 void setup() {
@@ -289,23 +239,27 @@ void setup() {
   strip.begin();
   strip.setBrightness(255);
   strip.show();
-  setColor(0, 0, 0);
+  strip.setPixelColor(0, 0, 0, 0);
+  strip.show();
   loadWiFiConfig();
   startAP();
-  if (storedSsid.length() > 0) {
-    tryConnect(storedSsid, storedPass);
-  }
-  server.begin();
+  if (storedSsid.length() > 0) connectWiFi(storedSsid, storedPass);
   sendDescribe();
-  pushUpdateStr("wifi_status", wifiStatusStr());
 }
 
 void loop() {
-  handleWebServer();
   static String lineBuf;
   while (Serial.available()) {
     char c = Serial.read();
     if (c == '\n') { handleLine(lineBuf); lineBuf = ""; }
     else if (c != '\r' && lineBuf.length() < 512) lineBuf += c;
+  }
+  if (rainbowUntil > millis()) {
+    strip.setBrightness(brightness);
+    strip.setPixelColor(0, strip.ColorHSV((uint16_t)((millis() / 5) % 65536)));
+    strip.show();
+  } else if (rainbowUntil != 0) {
+    rainbowUntil = 0;
+    applyColor();
   }
 }
