@@ -2,17 +2,62 @@
 #include <ArduinoJson.h>
 #include <WiFi.h>
 #include <Adafruit_NeoPixel.h>
+#include <Preferences.h>
 
 #define PIN_RGB 48
 #define NUM_PIXELS 1
 
+Preferences prefs;
 Adafruit_NeoPixel strip(NUM_PIXELS, PIN_RGB, NEO_GRB + NEO_KHZ800);
-WiFiServer server(80);
 
 static bool ledOn = false;
 static bool apOn = false;
 static uint8_t r = 0, g = 0, b = 255;
 static uint8_t brightness = 128;
+static String storedSsid = "";
+static String storedPass = "";
+
+static void saveWiFiConfig() {
+  prefs.begin("wifi", true);
+  prefs.putString("ssid", storedSsid);
+  prefs.putString("pass", storedPass);
+  prefs.end();
+}
+
+static void loadWiFiConfig() {
+  prefs.begin("wifi", false);
+  storedSsid = prefs.getString("ssid", "");
+  storedPass = prefs.getString("pass", "");
+  prefs.end();
+  Serial.printf("Loaded WiFi: %s\n", storedSsid.c_str());
+}
+
+static void connectWiFi() {
+  if (storedSsid.length() == 0) return;
+  WiFi.mode(WIFI_STA);
+  WiFi.begin(storedSsid.c_str(), storedPass.c_str());
+  int w = 0;
+  while (WiFi.status() != WL_CONNECTED && w < 20) {
+    delay(500);
+    Serial.print(".");
+    w++;
+  }
+  if (WiFi.status() == WL_CONNECTED) {
+    Serial.println("\nWiFi connected! IP: " + WiFi.localIP().toString());
+    apOn = false;
+    WiFi.softAPdisconnect(true);
+  } else {
+    Serial.println("\nWiFi connect failed, starting AP mode");
+    startAP();
+  }
+}
+
+static void startAP() {
+  WiFi.mode(WIFI_AP);
+  WiFi.softAP("ESP-RGB", "12345678");
+  apOn = true;
+  Serial.printf("AP started IP: %s\n", WiFi.softAPIP().toString().c_str());
+}
 
 static void sendJson(JsonDocument &doc) {
   serializeJson(doc, Serial);
@@ -73,6 +118,9 @@ static void sendDescribe() {
   bri["id"] = "brightness"; bri["type"] = "slider"; bri["label"] = "Brightness"; bri["min"] = 0; bri["max"] = 255; bri["value"] = brightness;
   JsonObject rain = c.add<JsonObject>();
   rain["id"] = "rainbow"; rain["type"] = "button"; rain["label"] = "Rainbow Demo";
+  // add wifi control placeholder
+  JsonObject wf = c.add<JsonObject>();
+  wf["id"] = "wifi"; wf["type"] = "readout"; wf["label"] = "WiFi"; wf["value"] = WiFi.localIP().toString();
   sendJson(doc);
 }
 
@@ -101,6 +149,16 @@ static void handleLine(const String &line) {
       brightness = doc["value"].as<int>();
       setColor(r, g, b);
       pushUpdateInt("brightness", brightness);
+    } else if (!strcmp(id, "wifi")) {
+      // expect value object with ssid and pass
+      const char* ssid = doc["value"]["ssid"] | "";
+      const char* pass = doc["value"]["pass"] | "";
+      if (ssid.length() > 0 && pass.length() > 0) {
+        storedSsid = ssid;
+        storedPass = pass;
+        saveWiFiConfig();
+        ESP.restart();
+      }
     }
   } else if (!strcmp(cmd, "press")) {
     const char* id = doc["id"] | "";
@@ -117,75 +175,58 @@ static void handleLine(const String &line) {
   }
 }
 
-static void startAP() {
-  WiFi.softAP("ESP-RGB", "12345678");
-  apOn = true;
-  server.begin();
-  Serial.printf("AP IP: %s\n", WiFi.softAPIP().toString().c_str());
+// Simple HTML page for WiFi config
+static const char htmlPage[] PROGMEM = R"rawliteral(
+<!DOCTYPE html><html><head><meta name='viewport' content='width=device-width, initial-scale=1'><title>ESP WiFi Config</title></head><body><h2>Connect to WiFi</h2><form action='/wifi_save' method='GET'>
+SSID: <input type='text' name='ssid' required><br>Password: <input type='password' name='pass' required><br><br><button type='submit'>Save & Connect</button></form><p>Current IP: <span id='ip'>%IP%</span></p></body></html>
+)rawliteral";
+
+static void sendHtmlPage(WiFiClient &client) {
+  String ip = WiFi.localIP().toString();
+  String page = htmlPage;
+  page.replace("%IP%", ip);
+  client.println("HTTP/1.1 200 OK");
+  client.println("Content-Type: text/html");
+  client.println("Connection: close");
+  client.println();
+  client.print(page);
 }
 
-static void stopAP() {
-  WiFi.softAPdisconnect(true);
-  apOn = false;
-}
-
-static int getParam(const String &query, const char *name, int def) {
-  String key = String(name) + "=";
-  int idx = query.indexOf(key);
-  if (idx < 0) return def;
-  int start = idx + key.length();
-  int end = query.indexOf('&', start);
-  if (end < 0) end = query.length();
-  String val = query.substring(start, end);
-  return val.toInt();
-}
-
-static void handleWiFi() {
+static void handleWebServer() {
   WiFiClient client = server.available();
   if (!client) return;
   String req = client.readStringUntil('\r');
   client.flush();
   if (req.indexOf("GET /") < 0) { client.stop(); return; }
-  if (req.indexOf("GET /set") >= 0) {
+  if (req.indexOf("GET /wifi_save") >= 0) {
     int qs = req.indexOf('?');
     if (qs >= 0) {
       String query = req.substring(qs + 1);
-      query.trim();
-      int idx = 0;
-      while (idx < query.length()) {
-        int amp = query.indexOf('&', idx);
-        String pair = (amp < 0) ? query.substring(idx) : query.substring(idx, amp);
-        int eq = pair.indexOf('=');
-        if (eq >= 0) {
-          String name = pair.substring(0, eq);
-          String val = pair.substring(eq + 1);
-          if (name == "r") r = val.toInt();
-          else if (name == "g") g = val.toInt();
-          else if (name == "b") b = val.toInt();
-          else if (name == "power") ledOn = (val == "1" || val == "on");
-          else if (name == "brightness") brightness = val.toInt();
-        }
-        idx = (amp < 0) ? query.length() : amp + 1;
-      }
-      setColor(r, g, b);
-    }
-  } else if (req.indexOf("GET /power") >= 0) {
-    int qs = req.indexOf('?');
-    if (qs >= 0) {
-      String query = req.substring(qs + 1);
-      int eq = query.indexOf('=');
-      if (eq >= 0) {
-        String val = query.substring(eq + 1);
-        ledOn = (val == "1" || val == "on");
-        setColor(r, g, b);
+      int ssIdx = query.indexOf("ssid=");
+      int passIdx = query.indexOf("pass=");
+      String ssid = (ssIdx >= 0) ? query.substring(ssIdx + 5) : "";
+      String pass = (passIdx >= 0) ? query.substring(passIdx + 5) : "";
+      if (ssid.length() > 0 && pass.length() > 0) {
+        storedSsid = ssid;
+        storedPass = pass;
+        saveWiFiConfig();
+        client.println("HTTP/1.1 200 OK");
+        client.println("Content-Type: text/plain");
+        client.println("Connection: close");
+        client.println();
+        client.println("Saving... restarting");
+        delay(500);
+        ESP.restart();
       }
     }
+    client.stop();
+    return;
   }
-  client.println("HTTP/1.1 200 OK");
-  client.println("Content-Type: text/plain");
-  client.println("Connection: close");
-  client.println();
-  client.println("OK");
+  if (req.indexOf("GET /") >= 0) {
+    sendHtmlPage(client);
+    client.stop();
+    return;
+  }
   client.stop();
 }
 
@@ -196,12 +237,15 @@ void setup() {
   strip.setBrightness(255);
   strip.show();
   setColor(0, 0, 0);
-  startAP();
+  loadWiFiConfig();
+  connectWiFi();
+  startAP(); // ensure AP always available for config
+  server.begin();
   sendDescribe();
 }
 
 void loop() {
-  handleWiFi();
+  handleWebServer();
   static String lineBuf;
   while (Serial.available()) {
     char c = Serial.read();
